@@ -7,5 +7,5 @@ env_args:
   task_type: "sku50.single_store.standard"
   mode: train
   time_limit: 100
-  reward: "reward2"
+  reward: "reward2_enhanced"
   

@@ -271,3 +271,42 @@ class ReplayBuffer(EpisodeBatch):
         return "ReplayBuffer. {}/{} episodes. Keys:{} Groups:{}".format(
             self.episodes_in_buffer, self.buffer_size, self.scheme.keys(), self.groups.keys())
 
+
+class PrioritizedReplayBuffer(ReplayBuffer):
+    """Simple prioritized replay buffer based on episode overflow"""
+
+    def __init__(self, scheme, groups, buffer_size, max_seq_length, alpha=0.6, preprocess=None, device="cpu"):
+        super(PrioritizedReplayBuffer, self).__init__(scheme, groups, buffer_size, max_seq_length,
+                                                     preprocess=preprocess, device=device)
+        self.alpha = alpha
+        self.priorities = np.zeros(buffer_size, dtype=np.float32)
+
+    def insert_episode_batch(self, ep_batch, priority=None):
+        if priority is None:
+            priority = [1.0] * ep_batch.batch_size
+
+        # record indices before insertion
+        if self.buffer_index + ep_batch.batch_size <= self.buffer_size:
+            idxs = list(range(self.buffer_index, self.buffer_index + ep_batch.batch_size))
+        else:
+            first = list(range(self.buffer_index, self.buffer_size))
+            second = list(range(0, ep_batch.batch_size - len(first)))
+            idxs = first + second
+
+        super().insert_episode_batch(ep_batch)
+
+        for i, p in zip(idxs, priority):
+            self.priorities[i] = float(p)
+
+    def sample(self, batch_size):
+        assert self.can_sample(batch_size)
+        prios = self.priorities[: self.episodes_in_buffer] ** self.alpha
+        if prios.sum() == 0:
+            prios = np.ones_like(prios)
+        probs = prios / prios.sum()
+        if self.episodes_in_buffer == batch_size:
+            ep_ids = np.arange(batch_size)
+        else:
+            ep_ids = np.random.choice(self.episodes_in_buffer, batch_size, replace=False, p=probs)
+        return self[ep_ids]
+

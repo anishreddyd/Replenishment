@@ -13,7 +13,7 @@ import torch
 import pdb
 
 import wandb
-from components.episode_buffer import ReplayBuffer
+from components.episode_buffer import ReplayBuffer, PrioritizedReplayBuffer
 from components.transforms import OneHot
 from components.reward_scaler import RewardScaler
 from controllers import REGISTRY as mac_REGISTRY
@@ -91,6 +91,8 @@ def run_sequential(args, logger):
     args.n_agents = env_info["n_agents"]
     args.n_actions = env_info["n_actions"]
     args.state_shape = env_info["state_shape"]
+    args.n_warehouses = env_info.get("n_warehouses", 1)
+    args.edge_index = env_info.get("edge_index")
     args.accumulated_episodes = getattr(args, "accumulated_episodes", None)
 
     scheme = {
@@ -120,7 +122,8 @@ def run_sequential(args, logger):
     groups = {"agents": args.n_agents}
     preprocess = {"actions": ("actions_onehot", [OneHot(out_dim=args.n_actions)])}
 
-    buffer = ReplayBuffer(
+    BufferCls = PrioritizedReplayBuffer if getattr(args, "use_per", False) else ReplayBuffer
+    buffer = BufferCls(
         scheme,
         groups,
         args.buffer_size,
@@ -203,7 +206,10 @@ def run_sequential(args, logger):
 
             if args.use_reward_normalization:
                 episode_batch = reward_scaler.transform(episode_batch)
-            buffer.insert_episode_batch(episode_batch)
+            overflow = 0.0
+            for i in range(args.n_warehouses):
+                overflow += train_stats.get(f"mean_excess_sum_store_{i+1}", 0)
+            buffer.insert_episode_batch(episode_batch, priority=[overflow] * episode_batch.batch_size)
 
         # Step 2: Train
         if buffer.can_sample(args.batch_size):
