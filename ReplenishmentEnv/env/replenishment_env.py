@@ -219,6 +219,16 @@ class ReplenishmentEnv(Env):
         self.balance                = [self.supply_chain[warehouse, "init_balance"] for warehouse in self.warehouse_list]
         self.per_balance            = np.zeros(self.agent_count)
 
+        rs_cfg = self.config.get("reward_shaping", {})
+        self.lambda1_start = rs_cfg.get("lambda1_start", 0.0)
+        self.lambda1_end = rs_cfg.get("lambda1_end", 0.0)
+        self.lambda2_start = rs_cfg.get("lambda2_start", 0.0)
+        self.lambda2_end = rs_cfg.get("lambda2_end", 0.0)
+        self.schedule_steps = rs_cfg.get("schedule_steps", 1)
+        self.lambda1 = self.lambda1_start
+        self.lambda2 = self.lambda2_start
+        self.total_steps = 0
+
         # Get mode related info from mode config
         mode_configs = [mode_config for mode_config in self.config["env"]["mode"] if mode_config["name"] == self.mode]
         assert(len(mode_configs) == 1)
@@ -288,6 +298,11 @@ class ReplenishmentEnv(Env):
         contains action_idx or action_quantity, defined by action_setting in config
     """
     def step(self, actions: np.array) -> Tuple[np.array, np.array, list, dict]:
+        # update adaptive penalties
+        progress = min(1.0, self.total_steps / max(1, self.schedule_steps))
+        self.lambda1 = self.lambda1_start + progress * (self.lambda1_end - self.lambda1_start)
+        self.lambda2 = self.lambda2_start + progress * (self.lambda2_end - self.lambda2_start)
+
         self.replenish(actions)
         self.sell()
         self.receive_sku()
@@ -302,6 +317,7 @@ class ReplenishmentEnv(Env):
         infos["reward_info"] = reward_info
 
         self.next_step()
+        self.total_steps += 1
         done = self.current_step >= self.durations
 
         return states, rewards, done, infos
@@ -382,7 +398,12 @@ class ReplenishmentEnv(Env):
         reward_info = {
             "unit_storage_cost": [self.supply_chain[warehouse, "unit_storage_cost"] for warehouse in self.warehouse_list]
         }
-        reward_info = eval(self.config["reward_function"])(self.agent_states, reward_info)
+        reward_info = eval(self.config["reward_function"])(
+            self.agent_states,
+            reward_info,
+            self.lambda1,
+            self.lambda2,
+        )
         rewards = reward_info["reward"]
         return rewards, reward_info
 
@@ -408,3 +429,20 @@ class ReplenishmentEnv(Env):
 
     def render(self) -> None:
         self.visualizer.render()
+
+    def get_graph(self):
+        edges = []
+        for warehouse in self.warehouse_list:
+            downstream = self.supply_chain[warehouse, "downstream"]
+            if downstream != self.supply_chain.get_consumer():
+                for i in range(self.sku_count):
+                    src = self.warehouse_to_id[warehouse] * self.sku_count + i
+                    dst = self.warehouse_to_id[downstream] * self.sku_count + i
+                    edges.append((src, dst))
+        for warehouse in self.warehouse_list:
+            base = self.warehouse_to_id[warehouse] * self.sku_count
+            for i in range(self.sku_count):
+                for j in range(i + 1, self.sku_count):
+                    edges.append((base + i, base + j))
+                    edges.append((base + j, base + i))
+        return np.array(edges, dtype=np.int64).T

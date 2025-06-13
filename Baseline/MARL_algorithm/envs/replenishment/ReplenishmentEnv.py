@@ -64,6 +64,11 @@ class FlattenObservation(ObservationWrapper):
     def step(self, actions):
         return self._env.step(actions)
 
+    def get_graph(self):
+        if hasattr(self._env, "get_graph"):
+            return self._env.get_graph()
+        return None
+
 class ReplenishmentEnv(MultiAgentEnv):
     def __init__(
         self,
@@ -197,6 +202,14 @@ class ReplenishmentEnv(MultiAgentEnv):
 
     def render(self):
         self._env.render()
+
+    def get_graph(self):
+        return self._env.get_graph()
+
+    def get_env_info(self):
+        info = super().get_env_info()
+        info["edge_index"] = self.get_graph()
+        return info
 
     def close(self):
         self._env.close()
