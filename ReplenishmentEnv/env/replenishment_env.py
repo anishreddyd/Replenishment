@@ -10,7 +10,7 @@ import pandas as pd
 import yaml
 
 
-from ReplenishmentEnv.env.helper_function.rewards import reward1, reward2
+from ReplenishmentEnv.env.helper_function.rewards import reward1, reward2, reward2_enhanced
 from ReplenishmentEnv.env.helper_function.warmup import replenish_by_last_demand
 from ReplenishmentEnv.env.helper_function.convertors import continuous, discrete, demand_mean_continuous, demand_mean_discrete
 from ReplenishmentEnv.env.helper_function.accept import equal_accept
