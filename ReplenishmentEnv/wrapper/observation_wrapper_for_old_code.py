@@ -256,3 +256,21 @@ class ObservationWrapper4OldCode(gym.Wrapper):
     
     def get_agent_count(self) -> int:
         return self.n_agents
+
+    def get_graph(self):
+        edges = []
+        sku_count = len(self.env.sku_list)
+        for warehouse in self.env.warehouse_list:
+            downstream = self.env.supply_chain[warehouse, "downstream"]
+            if downstream != self.env.supply_chain.get_consumer():
+                for i in range(sku_count):
+                    src = self.env.warehouse_to_id[warehouse] * sku_count + i
+                    dst = self.env.warehouse_to_id[downstream] * sku_count + i
+                    edges.append((src, dst))
+        for warehouse in self.env.warehouse_list:
+            base = self.env.warehouse_to_id[warehouse] * sku_count
+            for i in range(sku_count):
+                for j in range(i + 1, sku_count):
+                    edges.append((base + i, base + j))
+                    edges.append((base + j, base + i))
+        return np.array(edges, dtype=np.int64).T
