@@ -209,7 +209,12 @@ def run_sequential(args, logger):
             overflow = 0.0
             for i in range(args.n_warehouses):
                 overflow += train_stats.get(f"mean_excess_sum_store_{i+1}", 0)
-            buffer.insert_episode_batch(episode_batch, priority=[overflow] * episode_batch.batch_size)
+            if isinstance(buffer, PrioritizedReplayBuffer):
+                buffer.insert_episode_batch(
+                    episode_batch, priority=[overflow] * episode_batch.batch_size
+                )
+            else:
+                buffer.insert_episode_batch(episode_batch)
 
         # Step 2: Train
         if buffer.can_sample(args.batch_size):
