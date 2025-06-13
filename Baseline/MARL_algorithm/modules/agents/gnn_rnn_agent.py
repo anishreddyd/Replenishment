@@ -10,6 +10,7 @@ class GraphAttentionLayer(nn.Module):
         self.leakyrelu = nn.LeakyReLU(alpha)
 
     def forward(self, h, edge_index):
+
         """Efficient graph attention without Python loops."""
         Wh = self.fc(h)  # [B, N, F]
         src, dst = edge_index
