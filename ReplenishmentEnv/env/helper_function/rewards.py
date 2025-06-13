@@ -82,3 +82,16 @@ def reward2(agent_states: AgentStates, profit_info: dict) -> Tuple[np.array, dic
     }
 
     return reward_info
+
+
+def reward2_enhanced(agent_states: AgentStates, profit_info: dict, lambda1: float = 0.0, lambda2: float = 0.0) -> Tuple[np.array, dict]:
+    """Reward2 with overflow and imbalance penalties."""
+    info = reward2(agent_states, profit_info)
+    overflow_penalty = agent_states["all_warehouses", "excess"]
+    stocks = agent_states["all_warehouses", "in_stock"]
+    imbalance_penalty = np.var(stocks, axis=0, keepdims=True)
+    penalty = lambda1 * overflow_penalty + lambda2 * imbalance_penalty
+    info["reward"] = info["reward"] - penalty
+    info["overflow_penalty"] = overflow_penalty
+    info["imbalance_penalty"] = imbalance_penalty
+    return info
