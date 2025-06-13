@@ -10,22 +10,23 @@ class GraphAttentionLayer(nn.Module):
         self.leakyrelu = nn.LeakyReLU(alpha)
 
     def forward(self, h, edge_index):
-        # h: [B, N, F]
-        Wh = self.fc(h)
+
+        """Efficient graph attention without Python loops."""
+        Wh = self.fc(h)  # [B, N, F]
         src, dst = edge_index
-        src_h = Wh[:, src]
+        src_h = Wh[:, src]  # [B, E, F]
         dst_h = Wh[:, dst]
         e = self.leakyrelu(self.attn_fc(torch.cat([src_h, dst_h], dim=-1))).squeeze(-1)
-        B, E = e.shape
-        attn = torch.zeros_like(e)
-        dst = dst.to(h.device)
-        unique_dst = torch.unique(dst)
-        for d in unique_dst:
-            mask = dst == d
-            attn[:, mask] = torch.softmax(e[:, mask], dim=1)
+
+        dst_expand = dst.unsqueeze(0).expand(e.size(0), -1)
+        e_exp = torch.exp(e)
+        norm = torch.zeros(e.size(0), Wh.size(1), device=h.device)
+        norm.scatter_add_(1, dst_expand, e_exp)
+        attn = e_exp / (norm.gather(1, dst_expand) + 1e-6)
+
         out = torch.zeros_like(Wh)
-        for i in range(E):
-            out[:, dst[i]] += attn[:, i].unsqueeze(-1) * src_h[:, i]
+        src_h_weighted = src_h * attn.unsqueeze(-1)
+        out.scatter_add_(1, dst_expand.unsqueeze(-1).expand_as(src_h_weighted), src_h_weighted)
         return F.elu(out)
 
 class GNNRNNAgent(nn.Module):

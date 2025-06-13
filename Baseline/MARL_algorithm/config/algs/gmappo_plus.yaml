@@ -93,5 +93,3 @@ use_sample_prob_weights: True           # Whether to multiply the loss by a weig
                                         #   Q value under the lambda (assuming collecting using epsilon greedy with a large
                                         #   epsilon)
 
-use_per: True
-
