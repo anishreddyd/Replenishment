@@ -8,4 +8,5 @@ env_args:
   mode: train
   time_limit: 100
   reward: "reward2_enhanced"
+  cross_sku_edges: True
   

@@ -267,10 +267,11 @@ class ObservationWrapper4OldCode(gym.Wrapper):
                     src = self.env.warehouse_to_id[warehouse] * sku_count + i
                     dst = self.env.warehouse_to_id[downstream] * sku_count + i
                     edges.append((src, dst))
-        for warehouse in self.env.warehouse_list:
-            base = self.env.warehouse_to_id[warehouse] * sku_count
-            for i in range(sku_count):
-                for j in range(i + 1, sku_count):
-                    edges.append((base + i, base + j))
-                    edges.append((base + j, base + i))
+        if getattr(self.env, "cross_sku_edges", True):
+            for warehouse in self.env.warehouse_list:
+                base = self.env.warehouse_to_id[warehouse] * sku_count
+                for i in range(sku_count):
+                    for j in range(i + 1, sku_count):
+                        edges.append((base + i, base + j))
+                        edges.append((base + j, base + i))
         return np.array(edges, dtype=np.int64).T

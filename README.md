@@ -48,6 +48,8 @@ make_env("{task_name}")
 from ReplenishmentEnv import make_env
 make_env("{config_name}", config_dir="{config_dir}")
 ```
+* To speed up large multi-store scenarios, set `cross_sku_edges: False` in the
+  YAML config to remove pairwise SKU edges when building the graph.
 
 ## Run OR algorithm
 * Install MABIM

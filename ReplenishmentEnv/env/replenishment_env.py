@@ -64,6 +64,7 @@ class ReplenishmentEnv(Env):
         self.vis_path = os.path.join("output", datetime.now().strftime('%Y%m%d_%H%M%S')) if vis_path is None else vis_path
  
         self.load_config(config_path, update_config)
+        self.cross_sku_edges = self.config["env"].get("cross_sku_edges", True)
         self.build_supply_chain()
 
         self.load_data()
@@ -439,10 +440,11 @@ class ReplenishmentEnv(Env):
                     src = self.warehouse_to_id[warehouse] * self.sku_count + i
                     dst = self.warehouse_to_id[downstream] * self.sku_count + i
                     edges.append((src, dst))
-        for warehouse in self.warehouse_list:
-            base = self.warehouse_to_id[warehouse] * self.sku_count
-            for i in range(self.sku_count):
-                for j in range(i + 1, self.sku_count):
-                    edges.append((base + i, base + j))
-                    edges.append((base + j, base + i))
+        if self.cross_sku_edges:
+            for warehouse in self.warehouse_list:
+                base = self.warehouse_to_id[warehouse] * self.sku_count
+                for i in range(self.sku_count):
+                    for j in range(i + 1, self.sku_count):
+                        edges.append((base + i, base + j))
+                        edges.append((base + j, base + i))
         return np.array(edges, dtype=np.int64).T
