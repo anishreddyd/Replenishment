@@ -80,8 +80,9 @@ class LocalPPOLearner:
             else:
                 values = old_values
             
+            reward_scale = getattr(self.args, "reward_scale", 100)
             advantages, targets = build_gae_targets(
-                rewards * 100, #.unsqueeze(2).repeat(1, 1, self.n_agents, 1),
+                rewards * reward_scale, #.unsqueeze(2).repeat(1, 1, self.n_agents, 1),
                 mask_agent,
                 values,
                 self.args.gamma,
