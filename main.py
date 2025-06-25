@@ -39,11 +39,7 @@ def my_main(_run, _config, _log):
         wandb.init(project=config['wandb_project_name'], name=config['--config'], config=config)
 
     # run
-
-    if "use_per" in _config and _config["use_per"]:
-        run_REGISTRY["per_run"](_run, config, _log)
-    else:
-        run_REGISTRY[_config["run"]](_run, config, _log)
+    run_REGISTRY[_config["run"]](_run, config, _log)
 
 
 def _get_config(params, arg_name, subfolder):

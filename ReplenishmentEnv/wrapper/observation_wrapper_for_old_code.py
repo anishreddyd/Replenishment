@@ -22,7 +22,7 @@ class ObservationWrapper4OldCode(gym.Wrapper):
         self.column_lens["intransit_hist_sum"] = self.env.lookback_len
         
         self.state_dim = 0
-        self.state_info = ["local_info", "global_info", "level_info"]
+        self.state_info = ["local_info", "global_info", "level_info", "mean_field"]
         if "local_info" in self.state_info:
             self.local_info_dim = (16 + self.column_lens["demand_hist"] + self.column_lens["hist_order"])
             self.state_dim += self.local_info_dim
