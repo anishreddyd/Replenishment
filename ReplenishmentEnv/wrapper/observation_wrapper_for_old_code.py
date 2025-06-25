@@ -185,9 +185,14 @@ class ObservationWrapper4OldCode(gym.Wrapper):
         state = np.concatenate(state_list, axis = -1)
 
         if "mean_field" in self.state_info:
-            mean_info = state[:, :self.local_info_dim].mean(axis = 0, keepdims = True)
-            mean_info = np.tile(mean_info, (self.n_skus, 1))
-            state = np.concatenate([state, mean_info], axis = -1)
+            # state has shape (n_warehouses, n_skus, dim). We want to compute the
+            # mean field information by averaging over all agents (both
+            # warehouses and skus) for the local information part of the state.
+            mean_info = state[:, :, :self.local_info_dim].mean(axis=(0, 1), keepdims=True)
+            # Tile the mean information for each agent so that the dimensions
+            # match when concatenated with `state`.
+            mean_info = np.tile(mean_info, (self.n_warehouses, self.n_skus, 1))
+            state = np.concatenate([state, mean_info], axis=-1)
         # state = state.reshape(self.n_skus * self.n_warehouses, -1)
         # state = np.nan_to_num(state)
         return state
