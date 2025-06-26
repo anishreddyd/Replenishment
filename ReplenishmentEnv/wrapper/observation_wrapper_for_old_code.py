@@ -62,6 +62,7 @@ class ObservationWrapper4OldCode(gym.Wrapper):
     def get_state_v1(self) -> np.array:
         demand_mean = np.average(self.env.agent_states["all_warehouses", "demand", "lookback_with_current"], 1)
 
+        EPS = 1e-6
         state_normalize = demand_mean + 1
         state_normalize_reshape = state_normalize[:, :, np.newaxis]
         price_normalize = self.env.agent_states["all_warehouses", "selling_price"]
@@ -74,14 +75,14 @@ class ObservationWrapper4OldCode(gym.Wrapper):
             state_list.append(np.where(self.env.agent_states["all_warehouses", "in_stock"] <= 0, 1.0, 0.0)[:, :, np.newaxis])
 
             # inventory_in_stock
-            state_list.append((self.env.agent_states["all_warehouses", "in_stock"] / state_normalize)[:, :, np.newaxis])
+            state_list.append((self.env.agent_states["all_warehouses", "in_stock"] / (state_normalize + EPS))[:, :, np.newaxis])
 
             # inventory_in_transit
-            state_list.append((self.env.agent_states["all_warehouses", "in_transit"] / state_normalize)[:, :, np.newaxis])
+            state_list.append((self.env.agent_states["all_warehouses", "in_transit"] / (state_normalize + EPS))[:, :, np.newaxis])
 
             # inventory_estimated
             inventory_estimated = self.env.agent_states["all_warehouses", "in_stock"] + self.env.agent_states["all_warehouses", "in_transit"]
-            state_list.append((inventory_estimated / state_normalize)[:, :, np.newaxis])
+            state_list.append((inventory_estimated / (state_normalize + EPS))[:, :, np.newaxis])
 
             # inventory_rop
             sale_mean = np.mean(self.env.agent_states["all_warehouses", "sale", "lookback_with_current"], axis=1)
@@ -92,81 +93,81 @@ class ObservationWrapper4OldCode(gym.Wrapper):
                 * sale_std
                 * st.norm.ppf(0.95) # service_levels
             )
-            state_list.append((inventory_rop / state_normalize)[:, :, np.newaxis])
+            state_list.append((inventory_rop / (state_normalize + EPS))[:, :, np.newaxis])
 
             # is_below_rop
             state_list.append(np.where(inventory_estimated <= inventory_rop, 1.0, 0.0)[:, :, np.newaxis])
 
             # demand_std
-            state_list.append((np.std(self.env.agent_states["all_warehouses", "demand", "lookback_with_current"], axis=1) / state_normalize)[:, :, np.newaxis])
+            state_list.append((np.std(self.env.agent_states["all_warehouses", "demand", "lookback_with_current"], axis=1) / (state_normalize + EPS))[:, :, np.newaxis])
 
             # demand_hist
-            state_list.append(self.env.agent_states["all_warehouses", "demand", "lookback_with_current"].transpose([0, 2, 1]) / state_normalize_reshape)
+            state_list.append(self.env.agent_states["all_warehouses", "demand", "lookback_with_current"].transpose([0, 2, 1]) / (state_normalize_reshape + EPS))
             # capacity
-            state_list.append((demand_mean / storage_capacity)[:, :, np.newaxis])
+            state_list.append((demand_mean / (storage_capacity + EPS))[:, :, np.newaxis])
 
             # sku_price
-            state_list.append((self.env.agent_states["all_warehouses", "selling_price"] / price_normalize)[:, :, np.newaxis])
+            state_list.append((self.env.agent_states["all_warehouses", "selling_price"] / (price_normalize + EPS))[:, :, np.newaxis])
 
             # sku_cost
-            state_list.append((self.env.agent_states["all_warehouses", "procurement_cost"] / price_normalize)[:, :, np.newaxis])
+            state_list.append((self.env.agent_states["all_warehouses", "procurement_cost"] / (price_normalize + EPS))[:, :, np.newaxis])
             
             # sku_profit
             sku_profit = self.env.agent_states["all_warehouses", "selling_price"] - self.env.agent_states["all_warehouses", "procurement_cost"]
-            state_list.append((sku_profit / price_normalize)[:, :, np.newaxis])
+            state_list.append((sku_profit / (price_normalize + EPS))[:, :, np.newaxis])
 
             # holding_cost
             holding_cost = (self.env.agent_states["all_warehouses", "basic_holding_cost"] + 
                         unit_storage_cost * self.env.agent_states["all_warehouses", "volume"])
-            state_list.append((holding_cost / price_normalize)[:, :, np.newaxis])
+            state_list.append((holding_cost / (price_normalize + EPS))[:, :, np.newaxis])
 
             # order_cost
-            state_list.append((self.env.agent_states["all_warehouses", "unit_order_cost"] / price_normalize)[:, :, np.newaxis])
+            state_list.append((self.env.agent_states["all_warehouses", "unit_order_cost"] / (price_normalize + EPS))[:, :, np.newaxis])
 
             # vlt
             state_list.append(self.env.agent_states["all_warehouses", "vlt"][:, :, np.newaxis])
 
             # vlt_demand_mean
-            state_list.append(((demand_mean * (self.env.agent_states["all_warehouses", "vlt"] + 1)) / state_normalize)[:, :, np.newaxis])
+            state_list.append(((demand_mean * (self.env.agent_states["all_warehouses", "vlt"] + 1)) / (state_normalize + EPS))[:, :, np.newaxis])
 
             # vlt_day_remain
-            state_list.append(((inventory_estimated - demand_mean * 
-                                (self.env.agent_states["all_warehouses", "vlt"] + 1)) / state_normalize)[:, :, np.newaxis])
+            state_list.append(((inventory_estimated - demand_mean *
+                                (self.env.agent_states["all_warehouses", "vlt"] + 1)) / (state_normalize + EPS))[:, :, np.newaxis])
 
             # hist_order
             state_list.append(self.env.agent_states["all_warehouses", "replenish", "lookback_with_current"].transpose([0,2,1]) / \
-                            state_normalize_reshape)
+                            (state_normalize_reshape + EPS))
 
         if "global_info" in self.state_info:
             # in_stock_sum
             # state_list.append((np.ones((self.n_warehouses, self.n_skus)) * np.sum(self.env.agent_states["all_warehouses", "in_stock"], axis=-1) / storage_capacity)[:, :, np.newaxis])
-            state_list.append((np.ones((self.n_warehouses, self.n_skus)) * np.sum(self.env.agent_states["all_warehouses", "in_stock"], axis=-1)[:, np.newaxis] / storage_capacity)[:, :, np.newaxis])
+            state_list.append((np.ones((self.n_warehouses, self.n_skus)) * np.sum(self.env.agent_states["all_warehouses", "in_stock"], axis=-1)[:, np.newaxis] / (storage_capacity + EPS))[:, :, np.newaxis])
 
             # in_stock_profit
             state_list.append((np.ones((self.n_warehouses, self.n_skus)) * np.sum(self.env.agent_states["all_warehouses", "in_stock"] * sku_profit, axis=-1)[:, np.newaxis] / \
-                        ((np.sum(self.env.agent_states["all_warehouses", "in_stock"], axis=-1) + 1)[:, np.newaxis] * price_normalize))[:, :, np.newaxis])
+                        ((np.sum(self.env.agent_states["all_warehouses", "in_stock"], axis=-1) + 1)[:, np.newaxis] * (price_normalize + EPS)))[:, :, np.newaxis])
 
             # remain_capacity
             state_list.append((np.ones((self.n_warehouses, self.n_skus)) * np.sum(storage_capacity - self.env.agent_states["all_warehouses", "in_stock"], axis=-1)[:, np.newaxis] /
-                                            storage_capacity)[:, :, np.newaxis])
+                                            (storage_capacity + EPS))[:, :, np.newaxis])
 
             # intransit_sum
-            state_list.append((np.ones((self.n_warehouses, self.n_skus)) * np.sum(self.env.agent_states["all_warehouses", "in_transit"], axis=-1)[:, np.newaxis] / storage_capacity)[:, :, np.newaxis])
+            state_list.append((np.ones((self.n_warehouses, self.n_skus)) * np.sum(self.env.agent_states["all_warehouses", "in_transit"], axis=-1)[:, np.newaxis] / (storage_capacity + EPS))[:, :, np.newaxis])
 
             # intransit_hist_sum
             state_list.append(self.env.agent_states["all_warehouses", "replenish", "lookback_with_current"].transpose([0,2,1]) / \
-                            storage_capacity[:, :, np.newaxis])
+                            (storage_capacity[:, :, np.newaxis] + EPS))
 
             # intransit_profit
             state_list.append((np.ones((self.n_warehouses, self.n_skus)) * (self.env.agent_states["all_warehouses", "in_transit"] * sku_profit).sum() / \
-                        ((np.sum(self.env.agent_states["all_warehouses", "in_transit"], axis=-1)[:, np.newaxis] + 1) * price_normalize))[:, :, np.newaxis])
+                        ((np.sum(self.env.agent_states["all_warehouses", "in_transit"], axis=-1)[:, np.newaxis] + 1) * (price_normalize + EPS)))[:, :, np.newaxis])
 
             # instock_intransit_sum
-            state_list.append((np.ones((self.n_warehouses, self.n_skus)) * np.sum(inventory_estimated, axis=-1)[:, np.newaxis] / storage_capacity)[:, :, np.newaxis])
+            state_list.append((np.ones((self.n_warehouses, self.n_skus)) * np.sum(inventory_estimated, axis=-1)[:, np.newaxis] / (storage_capacity + EPS))[:, :, np.newaxis])
 
             # instock_intransit_profit
             state_list.append((np.ones((self.n_warehouses, self.n_skus)) * np.sum((inventory_estimated * sku_profit), axis=-1)[:, np.newaxis] / \
-                        ((np.sum(inventory_estimated, axis=-1)[:, np.newaxis] + 1) * price_normalize))[:, :, np.newaxis])
+                        ((np.sum(inventory_estimated, axis=-1)[:, np.newaxis] + 1) * (price_normalize + EPS)))[:, :, np.newaxis])
             
         if "level_info" in self.state_info:
             one_hot = np.repeat(np.eye(self.n_warehouses), self.n_skus, axis = 0).reshape((self.n_warehouses, self.n_skus, self.n_warehouses))
@@ -194,7 +195,7 @@ class ObservationWrapper4OldCode(gym.Wrapper):
             mean_info = np.tile(mean_info, (self.n_warehouses, self.n_skus, 1))
             state = np.concatenate([state, mean_info], axis=-1)
         # state = state.reshape(self.n_skus * self.n_warehouses, -1)
-        # state = np.nan_to_num(state)
+        state = np.nan_to_num(state, nan=0.0, posinf=0.0, neginf=0.0)
         return state
 
     """
