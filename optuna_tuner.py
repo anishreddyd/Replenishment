@@ -5,7 +5,7 @@ import optuna
 
 
 def objective(trial):
-    lr = trial.suggest_loguniform("lr", 1e-5, 5e-4)
+    lr = trial.suggest_float("lr", 1e-5, 5e-4, log=True)
     cmd = [
         "python",
         "main.py",
@@ -15,10 +15,16 @@ def objective(trial):
         "t_max=100000",
         "use_wandb=False",
     ]
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    result = subprocess.run(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+    )
     match = re.search(r"val return : ([\-\d\.]+)", result.stdout)
+    if not match:
+        match = re.search(r"new best val result : ([\-\d\.]+)", result.stdout)
     if match:
         return float(match.group(1))
+    if result.returncode != 0:
+        raise RuntimeError(f"main.py failed:\n{result.stdout}")
     return -float("inf")
 
 
