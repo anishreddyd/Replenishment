@@ -11,16 +11,16 @@ def objective(trial):
         "main.py",
         "--config=gmappo_plus",
         "--env-config=replenishment",
+        "with",
         f"lr={lr}",
-        "t_max=100000",
-        "use_wandb=False",
+        "t_max=100000"
     ]
     result = subprocess.run(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
     )
-    match = re.search(r"val return : ([\-\d\.]+)", result.stdout)
+    match = re.search(r"val return : ([\\-\\d\\.]+)", result.stdout)
     if not match:
-        match = re.search(r"new best val result : ([\-\d\.]+)", result.stdout)
+        match = re.search(r"new best val result : ([\\-\\d\\.]+)", result.stdout)
     if match:
         return float(match.group(1))
     if result.returncode != 0:

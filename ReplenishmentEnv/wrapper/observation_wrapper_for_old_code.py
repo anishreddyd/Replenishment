@@ -195,7 +195,12 @@ class ObservationWrapper4OldCode(gym.Wrapper):
             mean_info = np.tile(mean_info, (self.n_warehouses, self.n_skus, 1))
             state = np.concatenate([state, mean_info], axis=-1)
         # state = state.reshape(self.n_skus * self.n_warehouses, -1)
+
         state = np.nan_to_num(state, nan=0.0, posinf=0.0, neginf=0.0)
+
+        if np.isnan(state).any() or np.isinf(state).any():
+            print(f"[DEBUG] ObservationWrapper: NaN or Inf detected in FINAL state output!")
+
         return state
 
     """

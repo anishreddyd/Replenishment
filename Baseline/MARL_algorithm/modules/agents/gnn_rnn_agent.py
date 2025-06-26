@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 class GraphAttentionLayer(nn.Module):
     def __init__(self, in_features, out_features, alpha=0.2):
         super().__init__()
@@ -10,6 +11,10 @@ class GraphAttentionLayer(nn.Module):
         self.leakyrelu = nn.LeakyReLU(alpha)
 
     def forward(self, h, edge_index):
+        # --- START DEBUG: Check GAT Input ---
+        if torch.isnan(h).any():
+            print(f"[DEBUG] GraphAttentionLayer: NaN detected in INPUT h!")
+        # --- END DEBUG ---
 
         """Efficient graph attention without Python loops."""
         Wh = self.fc(h)  # [B, N, F]
@@ -18,16 +23,37 @@ class GraphAttentionLayer(nn.Module):
         dst_h = Wh[:, dst]
         e = self.leakyrelu(self.attn_fc(torch.cat([src_h, dst_h], dim=-1))).squeeze(-1)
 
-        dst_expand = dst.unsqueeze(0).expand(e.size(0), -1)
         e_exp = torch.exp(e)
+
+        # --- START DEBUG: Check for 'inf' after exponentiation ---
+        if torch.isinf(e_exp).any():
+            print(f"[DEBUG] GraphAttentionLayer: 'inf' detected in attention scores (e_exp) after torch.exp()!")
+        # --- END DEBUG ---
+
+        dst_expand = dst.unsqueeze(0).expand(e.size(0), -1)
         norm = torch.zeros(e.size(0), Wh.size(1), device=h.device)
         norm.scatter_add_(1, dst_expand, e_exp)
         attn = e_exp / (norm.gather(1, dst_expand) + 1e-6)
 
+        # --- START DEBUG: Check for 'NaN' in final attention weights ---
+        # This will trigger if you get inf / inf
+        if torch.isnan(attn).any():
+            print(f"[DEBUG] GraphAttentionLayer: 'NaN' detected in final attention weights (attn)!")
+        # --- END DEBUG ---
+
         out = torch.zeros_like(Wh)
         src_h_weighted = src_h * attn.unsqueeze(-1)
         out.scatter_add_(1, dst_expand.unsqueeze(-1).expand_as(src_h_weighted), src_h_weighted)
-        return F.elu(out)
+
+        final_out = F.elu(out)
+
+        # --- START DEBUG: Check GAT Output ---
+        if torch.isnan(final_out).any():
+            print(f"[DEBUG] GraphAttentionLayer: 'NaN' detected in the FINAL output of the layer!")
+        # --- END DEBUG ---
+
+        return final_out
+
 
 class GNNRNNAgent(nn.Module):
     def __init__(self, input_shape, args):
@@ -43,6 +69,14 @@ class GNNRNNAgent(nn.Module):
         return self.fc1.weight.new(1, self.args.hidden_dim).zero_()
 
     def forward(self, inputs, hidden_state):
+        # --- START DEBUG: Check Agent Input ---
+        if self.args.debug_mode:
+            if torch.isnan(inputs).any():
+                print(f"[DEBUG] GNNRNNAgent: NaN detected in INPUTS to forward()!")
+            if torch.isnan(hidden_state).any():
+                print(f"[DEBUG] GNNRNNAgent: NaN detected in hidden_state INPUT to forward()!")
+        # --- END DEBUG ---
+
         b, a, e = inputs.size()
         x = F.relu(self.fc1(inputs), inplace=True)
         edge_index = self.edge_index.to(inputs.device)
@@ -51,5 +85,11 @@ class GNNRNNAgent(nn.Module):
         h_in = hidden_state.reshape(-1, self.args.hidden_dim)
         hh = self.rnn(x, h_in)
         q = self.fc2(hh)
-        return q.view(b, a, -1), hh.view(b, a, -1)
 
+        # --- START DEBUG: Check Agent Output ---
+        if self.args.debug_mode:
+            if torch.isnan(q).any():
+                print(f"[DEBUG] GNNRNNAgent: NaN detected in OUTPUT q (logits)!")
+        # --- END DEBUG ---
+
+        return q.view(b, a, -1), hh.view(b, a, -1)
