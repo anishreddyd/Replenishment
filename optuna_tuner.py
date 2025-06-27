@@ -1,23 +1,30 @@
 import os
 import re
 import subprocess
-import optuna
 import time
-from multiprocessing import Process, Queue
+from multiprocessing import Process, Queue, Lock
+import optuna
 from typing import List
 
-# --- CONFIGURATION FOR PARALLEL EXECUTION ON A SINGLE GPU ---
-N_PARALLEL_TRIALS = 2
-GPU_IDS: List[int] = [0, 0]
-TOTAL_TRIALS_TO_RUN = 50 # Total trials to run
+# --- CONFIGURATION ---
+N_PARALLEL_TRIALS = 2  # Number of trials to run in parallel
+GPU_IDS: List[int] = [0, 0]  # List of GPU IDs to use for the parallel trials
+TOTAL_TRIALS_TO_RUN = 10  # Total number of trials to run for the entire study
+
+# --- LOCK FOR PRINTING TO PREVENT GARBLED OUTPUT ---
+print_lock = Lock()
+
 
 def run_trial(trial: optuna.trial.Trial, gpu_id: int) -> float:
     """
-    This function runs a single training process for one Optuna trial on a specific GPU.
+    Runs a single training process for one Optuna trial on a specific GPU.
     """
     lr = trial.params["lr"]
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+
+    with print_lock:
+        print(f"🚀 Starting Trial {trial.number} on GPU {gpu_id} with lr={lr:.6e}...")
 
     cmd = [
         "python",
@@ -26,64 +33,80 @@ def run_trial(trial: optuna.trial.Trial, gpu_id: int) -> float:
         "--env-config=replenishment",
         "with",
         f"lr={lr}",
-        "t_max=20000",
+        "t_max=1000000",  # Using a reasonable number of timesteps
         "use_cuda=True",
-        "debug_mode=False" # This is still correct to keep logs clean
+        "debug_mode=False"  # Keep logs clean for production runs
     ]
 
+    # Execute the training script
     result = subprocess.run(cmd, capture_output=True, text=True, env=env)
 
+    # Check if the subprocess crashed
     if result.returncode != 0:
-        print(f"--- TRIAL {trial.number} (GPU {gpu_id}) FAILED ---")
-        print(result.stderr)
+        with print_lock:
+            print(f"--- ❌ TRIAL {trial.number} (GPU {gpu_id}) FAILED (Exit Code: {result.returncode}) ---")
+            print("--- STDERR ---")
+            print(result.stderr)
+            print("---------------------------------------------------------")
         raise optuna.exceptions.TrialPruned()
 
-    # --- CORRECTED REGEX ---
-    # Look for the "new test result : " line printed when the model improves.
+    # Regex to find all instances of the test result log
     matches = re.findall(r"new test result : ([\-\d\.]+)", result.stdout)
 
     if matches:
-        # The script might print this line multiple times if the model keeps improving.
-        # We take the last (and best) one.
+        # The script might print this line multiple times. We take the last (best) one.
         scores = [float(m) for m in matches]
         best_score = scores[-1]
-        print(f"--- TRIAL {trial.number} (GPU {gpu_id}) SUCCESS --- Scores: {scores}, Best: {best_score}")
+        with print_lock:
+            print(f"--- ✅ TRIAL {trial.number} (GPU {gpu_id}) SUCCESS --- Final Score: {best_score}")
         return best_score
     else:
-        # If the model never improves, it never prints the key.
-        # We can treat this as a failed trial and prune it.
-        print(f"--- TRIAL {trial.number} (GPU {gpu_id}) NO IMPROVEMENT ---")
-        print("Could not find 'new test result :'. Pruning.")
+        # If the key is never found, the model likely didn't improve. Prune the trial.
+        with print_lock:
+            print(f"--- ⚠️ TRIAL {trial.number} (GPU {gpu_id}) NO IMPROVEMENT ---")
+            print("Could not find 'new test result :'. Pruning.")
+            # Optional: Print stdout for debugging mismatches
+            # print("--- STDOUT ---")
+            # print(result.stdout)
+            print("---------------------------------------------------------")
         raise optuna.exceptions.TrialPruned()
 
-def objective_worker(study: optuna.study.Study, gpu_queue: Queue):
+
+def objective_worker(study: optuna.study.Study, gpu_queue: Queue, trials_processed_queue: Queue):
     """
-    A worker process that runs trials.
+    A worker process that continuously fetches a GPU, asks for a trial, runs it, and reports back.
     """
-    gpu_id = gpu_queue.get()
     while True:
-        try:
-            # Ask the study for a new trial with suggested hyperparameters
-            trial = study.ask({
-                "lr": optuna.distributions.LogUniformDistribution(1e-6, 1e-4)
-            })
-        except Exception:
+        # Wait for an available GPU
+        gpu_id = gpu_queue.get()
+        if gpu_id is None:  # Sentinel value to stop the worker
             break
+
+        try:
+            # FIX: Use the new FloatDistribution for logarithmic sampling
+            trial = study.ask({"lr": optuna.distributions.FloatDistribution(1e-6, 1e-4, log=True)})
+        except Exception:
+            # If asking for a trial fails, the study might be over.
+            gpu_queue.put(gpu_id)
+            break
+
         try:
             result = run_trial(trial, gpu_id)
             study.tell(trial, result)
         except optuna.exceptions.TrialPruned:
             study.tell(trial, state=optuna.trial.TrialState.PRUNED)
         except Exception as e:
-            print(f"An unexpected error occurred in trial {trial.number}: {e}")
+            with print_lock:
+                print(f"An unexpected error occurred in trial {trial.number}: {e}")
             study.tell(trial, state=optuna.trial.TrialState.FAIL)
-    gpu_queue.put(gpu_id)
+        finally:
+            # Return the GPU to the queue for another worker to use
+            gpu_queue.put(gpu_id)
+            trials_processed_queue.put(1)  # Signal that one trial is done
+
 
 if __name__ == "__main__":
-    # Correctly create the storage and study for parallel execution
-    storage = optuna.storages.InMemoryStorage()
     study = optuna.create_study(
-        storage=storage,
         study_name="gmappo_tuning_parallel",
         direction="maximize"
     )
@@ -92,31 +115,44 @@ if __name__ == "__main__":
     for gpu_id in GPU_IDS:
         gpu_queue.put(gpu_id)
 
+    trials_processed_queue = Queue()
     processes = []
-    print(f" Starting {N_PARALLEL_TRIALS} parallel trials on GPUs: {GPU_IDS}")
+
+    print(f"🔬 Starting study with {N_PARALLEL_TRIALS} parallel workers on GPUs: {GPU_IDS}")
 
     for _ in range(N_PARALLEL_TRIALS):
-        p = Process(target=objective_worker, args=(study, gpu_queue))
+        p = Process(target=objective_worker, args=(study, gpu_queue, trials_processed_queue))
         p.start()
         processes.append(p)
 
-    # Monitor progress until all trials are accounted for
-    while study.n_trials < TOTAL_TRIALS_TO_RUN:
-        time.sleep(1)
-        print(f"Completed {study.n_trials}/{TOTAL_TRIALS_TO_RUN} trials...", end="\r")
+    # Monitor progress until the target number of trials is reached
+    completed_trials = 0
+    while completed_trials < TOTAL_TRIALS_TO_RUN:
+        trials_processed_queue.get()  # Wait for a trial to finish
+        completed_trials += 1
+        print(f"📈 Progress: {completed_trials}/{TOTAL_TRIALS_TO_RUN} trials completed...", end="\r")
 
-    # Wait for all processes to finish
+    # Stop all worker processes
+    for _ in range(N_PARALLEL_TRIALS):
+        gpu_queue.put(None)  # Sentinel value to signal workers to stop
+
     for p in processes:
         p.join()
 
-    print(f"\n\n--- STUDY COMPLETE ---")
-    complete_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+    print(f"\n\n--- 🏆 STUDY COMPLETE 🏆 ---")
+    pruned_trials = study.get_trials(deepcopy=False, states=[optuna.trial.TrialState.PRUNED])
+    complete_trials = study.get_trials(deepcopy=False, states=[optuna.trial.TrialState.COMPLETE])
+
+    print(f"Total Trials: {len(study.trials)}")
+    print(f"  ✅ Completed: {len(complete_trials)}")
+    print(f"   pruned: {len(pruned_trials)}")
+
     if not complete_trials:
-        print("No trials completed successfully.")
+        print("\nNo trials completed successfully.")
     else:
         best_trial = study.best_trial
-        print("\n--- BEST TRIAL ---")
-        print(f"  Value (Best test score): {best_trial.value}")
-        print("  Params: ")
+        print("\n--- ⭐ BEST TRIAL ---")
+        print(f"  Value (Best Score): {best_trial.value:.4f}")
+        print("  Parameters: ")
         for key, value in best_trial.params.items():
-            print(f"    {key}: {value}")
+            print(f"    {key}: {value:.6e}")
