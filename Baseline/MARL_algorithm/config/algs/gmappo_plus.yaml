@@ -2,7 +2,7 @@
 
 test_greedy: True                       # Use greedy evaluation (if False, will set epsilon floor to 0)
 test_nepisode: 10                       # Evaluate the policy at the end of training for test_nepsidoes episodes
-test_interval: 50000                    # Evaluate the policy for every test_interval iterations
+test_interval: 10000                    # Evaluate the policy for every test_interval iterations
 log_interval: 10000                     # Print stats to console for every log_interval iterations
 visualize: False                        # Whether to visualize the policy
 visualize_interval: 500000                # Visualize the policy for every visualize_interval iterations
@@ -92,7 +92,6 @@ use_sample_prob_weights: True           # Whether to multiply the loss by a weig
                                         #   If True, give weights equaling the probability of this sample collected by the
                                         #   Q value under the lambda (assuming collecting using epsilon greedy with a large
                                         #   epsilon)
-
 use_per: true
 use_value_norm: True
 reward_scale: 100

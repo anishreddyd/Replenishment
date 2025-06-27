@@ -4,7 +4,7 @@ from torch.optim import Adam
 from components.action_selectors import categorical_entropy
 from components.episode_buffer import EpisodeBatch
 from modules.critics import REGISTRY as critic_resigtry
-from utils.rl_utils import build_gae_targets, build_gae_targets_with_T
+from utils.rl_utils import build_gae_targets
 from utils.value_norm import ValueNorm
 import wandb
 
@@ -22,10 +22,6 @@ class LocalPPOLearner:
 
         self.log_stats_t = -self.args.learner_log_interval - 1
 
-        # a trick to reuse mac
-        # dummy_args = copy.deepcopy(args)
-        # dummy_args.n_actions = 1
-        # self.critic = NMAC(scheme, None, dummy_args)
         self.critic = critic_resigtry[args.critic_type](scheme, args)
         self.params = list(self.mac.parameters()) + list(self.critic.parameters())
 
@@ -79,18 +75,19 @@ class LocalPPOLearner:
                 )
             else:
                 values = old_values
-            
+
             reward_scale = getattr(self.args, "reward_scale", 100)
             advantages, targets = build_gae_targets(
-                rewards * reward_scale, #.unsqueeze(2).repeat(1, 1, self.n_agents, 1),
+                rewards * reward_scale,
                 mask_agent,
                 values,
                 self.args.gamma,
                 self.args.gae_lambda,
             )
 
-        normed_advantages = (advantages - advantages.mean()) / \
-            (advantages.std() + 1e-6)
+        normed_advantages = (advantages - advantages.mean()) / (
+                advantages.std() + 1e-6
+        )
 
         # PPO Loss
         for _ in range(self.args.mini_epochs):
@@ -105,18 +102,18 @@ class LocalPPOLearner:
             else:
                 values = self.critic(batch)[:, :-1]
 
-            # # value clip
-            # values_clipped = old_values[:, :-1] + (values - old_values[:, :-1]).clamp(
-            #     -self.args.eps_clip, self.args.eps_clip
-            # )
+            # --- CHANGED: Enabled and corrected PPO Value Clipping ---
+            # This is critical for stabilizing the critic's updates.
+            values_clipped = old_values[:, :-1] + (values - old_values[:, :-1]).clamp(
+                -self.args.eps_clip, self.args.eps_clip
+            )
+            # Unclipped loss
+            v_loss_unclipped = (values - targets.detach()) ** 2
+            # Clipped loss
+            v_loss_clipped = (values_clipped - targets.detach()) ** 2
+            # Take the maximum of the two losses
+            td_error = torch.max(v_loss_unclipped, v_loss_clipped)
 
-            # # 0-out the targets that came from padded data
-            # td_error = torch.max(
-            #     (values - targets.detach()) ** 2,
-            #     (values_clipped - targets.detach()) ** 2,
-            # )
-            
-            td_error = (values - targets.detach()) ** 2
             masked_td_error = td_error * mask_agent
             critic_loss = 0.5 * masked_td_error.sum() / mask_agent.sum()
 
@@ -126,68 +123,74 @@ class LocalPPOLearner:
             for t in range(batch.max_seq_length - 1):
                 agent_outs = self.mac.forward(batch, t, t_env)
                 pi.append(agent_outs)
-            pi = torch.stack(pi, dim=1)  # Concat over time
+            pi = torch.stack(pi, dim=1)
 
             pi[avail_actions == 0] = 1e-10
             pi_taken = torch.gather(pi, dim=3, index=actions)
-            log_pi_taken = torch.log(pi_taken)
 
-            ratios = torch.exp(log_pi_taken - old_logprob) 
+            # --- CHANGED: Added epsilon for numerical stability ---
+            # Prevents log(0) which can lead to -inf and crash training
+            log_pi_taken = torch.log(pi_taken + 1e-8)
+
+            ratios = torch.exp(log_pi_taken - old_logprob)
             surr1 = ratios * normed_advantages
             surr2 = (
-                torch.clamp(ratios, 1 - self.args.eps_clip, 1 + self.args.eps_clip)
-                * normed_advantages
+                    torch.clamp(ratios, 1 - self.args.eps_clip, 1 + self.args.eps_clip)
+                    * normed_advantages
             )
             actor_loss = (
-                -(torch.min(surr1, surr2) * mask_agent).sum() / mask_agent.sum()
+                    -(torch.min(surr1, surr2) * mask_agent).sum() / mask_agent.sum()
             )
 
-            # entropy
+            # Entropy
             entropy_loss = categorical_entropy(pi).mean(
                 -1, keepdim=True
-            )  # mean over agents
-            entropy_loss[mask == 0] = 0  # fill nan
+            )
+            entropy_loss[mask == 0] = 0
             entropy_loss = (entropy_loss * mask).sum() / mask.sum()
 
-            
             loss = (
-                actor_loss
-                + self.args.critic_coef * critic_loss
-                - self.args.entropy_coef * entropy_loss
+                    actor_loss
+                    + self.args.critic_coef * critic_loss
+                    - self.args.entropy_coef * entropy_loss
             )
 
             # Optimise agents
             self.optimiser.zero_grad()
             loss.backward()
+
+            # Your gradient clipping is already correctly implemented here
             grad_norm = torch.nn.utils.clip_grad_norm_(
                 self.params, self.args.grad_norm_clip
             )
             self.optimiser.step()
 
             if _ == self.args.mini_epochs - 1:
-
-                wandb.log({'loss': loss.item(),
-                           'actor_loss': actor_loss.item(),
-                           'critic_loss': critic_loss.item(),
-                           'values': values.mean().item(),
-                           'targets': targets.mean().item(),
-                           'reward': rewards.mean(),
-                           })
+                wandb.log(
+                    {
+                        "loss": loss.item(),
+                        "actor_loss": actor_loss.item(),
+                        "critic_loss": critic_loss.item(),
+                        "values": values.mean().item(),
+                        "targets": targets.mean().item(),
+                        "reward": rewards.mean(),
+                        "grad_norm": grad_norm.item()  # Also good to log the grad norm
+                    }
+                )
 
     def cuda(self):
         self.mac.cuda()
         self.critic.cuda()
 
-    def save_models(self, path, postfix = ""):
+    def save_models(self, path, postfix=""):
         self.mac.save_models(path, postfix)
-        torch.save(self.optimiser.state_dict(), "{}/agent_opt".format(path)+postfix+".th")
+        torch.save(self.optimiser.state_dict(), "{}/agent_opt".format(path) + postfix + ".th")
 
-    def load_models(self, path, postfix = ""):
+    def load_models(self, path, postfix=""):
         self.mac.load_models(path, postfix)
-        # Not quite right but I don't want to save target networks
         self.optimiser.load_state_dict(
             torch.load(
-                "{}/agent_opt".format(path)+postfix+".th",
+                "{}/agent_opt".format(path) + postfix + ".th",
                 map_location=lambda storage, loc: storage,
             )
         )
