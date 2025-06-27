@@ -9,7 +9,7 @@ from typing import List
 # --- CONFIGURATION ---
 N_PARALLEL_TRIALS = 1
 GPU_IDS: List[int] = [0]
-TOTAL_TRIALS_TO_RUN = 1  # Run a few trials for a robust test
+TOTAL_TRIALS_TO_RUN = 1
 
 print_lock = Lock()
 
@@ -18,6 +18,7 @@ def run_trial(trial: optuna.trial.Trial, gpu_id: int) -> float:
     lr = trial.params["lr"]
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    env["PYTHONUNBUFFERED"] = "1"
 
     with print_lock:
         print(f"🚀 Starting Trial {trial.number} on GPU {gpu_id} with lr={lr:.6e}...")
@@ -34,20 +35,14 @@ def run_trial(trial: optuna.trial.Trial, gpu_id: int) -> float:
         "debug_mode=True"
     ]
 
-    # --- FIX: Use Popen to stream output in real-time ---
     process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,  # Redirect stderr to stdout
-        text=True,
-        env=env
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env
     )
 
     full_output = []
-    # Read the output line by line as it is generated
     for line in iter(process.stdout.readline, ''):
         line = line.strip()
-        print(line)  # Print each line to the console immediately
+        print(line)
         full_output.append(line)
 
     process.stdout.close()
@@ -60,7 +55,6 @@ def run_trial(trial: optuna.trial.Trial, gpu_id: int) -> float:
             print(f"--- ❌ TRIAL {trial.number} (GPU {gpu_id}) FAILED (Exit Code: {returncode}) ---")
         raise optuna.exceptions.TrialPruned()
 
-    # Now, parse the full captured output
     matches = re.findall(r"new test result : ([\-\d\.]+)", full_stdout_str)
 
     if matches:
@@ -72,13 +66,16 @@ def run_trial(trial: optuna.trial.Trial, gpu_id: int) -> float:
     else:
         with print_lock:
             print(f"--- ⚠️ TRIAL {trial.number} (GPU {gpu_id}) KEY MISMATCH ---")
-            print("Could not find 'test_return_mean:'. Pruning.")
+            print("Could not find 'new test result :'. Pruning.")
         raise optuna.exceptions.TrialPruned()
 
-
-# ... (The rest of the file (objective_worker, __main__) remains the same as the previous correct version)
-def objective_worker(study: optuna.study.Study, gpu_queue: Queue, trials_processed_queue: Queue):
+def objective_worker(study: optuna.study.Study, gpu_queue: Queue):
+    """
+    Worker process that runs trials. It no longer needs the processed queue.
+    """
     while True:
+        # Check if the study is finished before asking for a new trial
+        # This prevents starting extra trials
         if len(study.get_trials(deepcopy=False)) >= TOTAL_TRIALS_TO_RUN:
             break
         gpu_id = gpu_queue.get()
@@ -100,29 +97,31 @@ def objective_worker(study: optuna.study.Study, gpu_queue: Queue, trials_process
             study.tell(trial, state=optuna.trial.TrialState.FAIL)
         finally:
             gpu_queue.put(gpu_id)
-            trials_processed_queue.put(1)
-
 
 if __name__ == "__main__":
     study = optuna.create_study(
-        study_name="gmappo_tuning_streaming",
+        study_name="gmappo_tuning_final",
         direction="maximize"
     )
     gpu_queue = Queue()
     for gpu_id in GPU_IDS:
         gpu_queue.put(gpu_id)
-    trials_processed_queue = Queue()
+
     processes = []
     print(f"🔬 Starting study with {N_PARALLEL_TRIALS} parallel workers on GPUs: {GPU_IDS}")
     for _ in range(N_PARALLEL_TRIALS):
-        p = Process(target=objective_worker, args=(study, gpu_queue, trials_processed_queue))
+        p = Process(target=objective_worker, args=(study, gpu_queue))
         p.start()
         processes.append(p)
-    completed_trials = 0
-    while completed_trials < TOTAL_TRIALS_TO_RUN:
-        trials_processed_queue.get()
-        completed_trials += 1
-        print(f"📈 Progress: {completed_trials}/{TOTAL_TRIALS_TO_RUN} trials completed...", end="\r")
+
+    # --- FIX: Monitor the study object directly instead of a separate queue ---
+    while len(study.get_trials(deepcopy=False)) < TOTAL_TRIALS_TO_RUN:
+        # Print progress using the study's trial count
+        n_trials = len(study.get_trials(deepcopy=False))
+        print(f"📈 Progress: {n_trials}/{TOTAL_TRIALS_TO_RUN} trials registered...", end="\r")
+        time.sleep(1) # Wait a moment to avoid spamming and allow the study to update
+
+    # Stop all worker processes
     for _ in range(N_PARALLEL_TRIALS):
         gpu_queue.put(None)
     for p in processes:
