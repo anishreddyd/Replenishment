@@ -61,7 +61,7 @@ def run_trial(trial: optuna.trial.Trial, gpu_id: int) -> float:
         raise optuna.exceptions.TrialPruned()
 
     # Now, parse the full captured output
-    matches = re.findall(r"test_return_mean: ([\-\d\.]+)", full_stdout_str)
+    matches = re.findall(r"new test result : ([\-\d\.]+)", full_stdout_str)
 
     if matches:
         scores = [float(m) for m in matches]
