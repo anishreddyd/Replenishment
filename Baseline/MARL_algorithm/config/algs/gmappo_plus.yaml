@@ -2,7 +2,7 @@
 
 test_greedy: True                       # Use greedy evaluation (if False, will set epsilon floor to 0)
 test_nepisode: 10                       # Evaluate the policy at the end of training for test_nepsidoes episodes
-test_interval: 10000                    # Evaluate the policy for every test_interval iterations
+test_interval: 50000                    # Evaluate the policy for every test_interval iterations
 log_interval: 10000                     # Print stats to console for every log_interval iterations
 visualize: False                        # Whether to visualize the policy
 visualize_interval: 500000                # Visualize the policy for every visualize_interval iterations
@@ -62,15 +62,16 @@ whittle_hidden_dim: 128                 # The number of hiddent units for the Wh
 
 gamma: 0.985                            # Discount rate for the MDP
 optim: "Adam"                           # Whether to use "Adam" or "RMSprop"
-lr: 0.0005                              # Learning rate used for Q network and Whittle index network training
+lr: 0.000045                            # Learning rate used for Q network and Whittle index network training
+use_lr_decay: True
 optim_alpha: 0.99                       # alpha in RMSProp
 optim_eps: 0.00001                      # epsilon in RMSProp
-grad_norm_clip: 10                      # Reduce magnitude of gradients above this L2 norm
+grad_norm_clip: 1.0                      # Reduce magnitude of gradients above this L2 norm
 critic_coef: 0.5
-entropy_coef: 0 #0.001 
+entropy_coef: 0.01 #0.001
 reg_coef: 0.01
 gae_lambda: 0.95
-mini_epochs: 2
+mini_epochs: 4
 eps_clip: 0.15
 gain: 0.01
 
@@ -80,7 +81,7 @@ n_lambda: 51                            # How many lambdas to use;
 use_individual_rewards: True            # Whether to train the agents using individual rewards
 use_mean_team_reward: True              # Whether to train the agents using mean team rewards
 
-use_reward_normalization: False          # Whether to normalize reward;
+use_reward_normalization: True          # Whether to normalize reward;
                                         #   If True, we estimate a reward scaler for each lambda 
                                         #   and use it to transform the reward with these fixed scalers
 use_loss_normalization: False           # Whether to normlize loss;
@@ -94,5 +95,5 @@ use_sample_prob_weights: True           # Whether to multiply the loss by a weig
                                         #   epsilon)
 use_per: true
 use_value_norm: True
-reward_scale: 100
+reward_scale: 1
 debug_mode: False
