@@ -26,6 +26,7 @@ class LocalPPOLearner:
         self.params = list(self.mac.parameters()) + list(self.critic.parameters())
 
         self.optimiser = Adam(params=self.params, lr=args.lr)
+        self.initial_lr = args.lr
         self.last_lr = args.lr
 
         self.use_value_norm = getattr(self.args, "use_value_norm", False)
@@ -33,6 +34,20 @@ class LocalPPOLearner:
             self.value_norm = ValueNorm(1, device=self.args.device)
 
     def train(self, batch: EpisodeBatch, t_env: int, episode_num: int):
+        # --- START: LEARNING RATE DECAY LOGIC ---
+        if getattr(self.args, "use_lr_decay", False):
+            # Calculate the fraction of total training time that has passed
+            frac = t_env / self.args.t_max
+            # Linearly decay the learning rate from its initial value to zero
+            new_lr = self.initial_lr * (1.0 - frac)
+            # Ensure the learning rate does not become negative
+            new_lr = max(new_lr, 0.0)
+
+            # Apply the new learning rate to the optimizer
+            for param_group in self.optimiser.param_groups:
+                param_group['lr'] = new_lr
+        # --- END: LEARNING RATE DECAY LOGIC ---
+
         # Get the relevant quantities
         if self.args.use_individual_rewards:
             rewards = batch["individual_rewards"][:, :-1].to(batch.device)
