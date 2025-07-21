@@ -13,7 +13,7 @@ import torch
 import pdb
 
 import wandb
-from components.episode_buffer import ReplayBuffer
+from components.episode_buffer import ReplayBuffer, PrioritizedReplayBuffer  # Import both
 from components.transforms import OneHot
 from components.reward_scaler import RewardScaler
 from controllers import REGISTRY as mac_REGISTRY
@@ -23,14 +23,13 @@ from runners import REGISTRY as r_REGISTRY
 from utils.logging import Logger
 from utils.timehelper import time_left, time_str
 
-def run(_run, _config, _log):
 
+def run(_run, _config, _log):
     # check args sanity
     _config = args_sanity_check(_config, _log)
 
     args = SN(**_config)
     args.device = "cuda" if args.use_cuda else "cpu"
-    # args.device = "cpu"
 
     # setup loggers
     logger = Logger(_log)
@@ -81,7 +80,6 @@ def run(_run, _config, _log):
 
 
 def run_sequential(args, logger):
-
     # Init runner so we can get env info
     runner = r_REGISTRY[args.runner](args=args, logger=logger)
 
@@ -90,6 +88,9 @@ def run_sequential(args, logger):
     args.n_agents = env_info["n_agents"]
     args.n_actions = env_info["n_actions"]
     args.state_shape = env_info["state_shape"]
+    # --- ADDED: Pass GNN-specific info from the env to the agent ---
+    args.n_warehouses = env_info.get("n_warehouses", 1)
+    args.edge_index = env_info.get("edge_index")
     args.accumulated_episodes = getattr(args, "accumulated_episodes", None)
 
     scheme = {
@@ -119,7 +120,9 @@ def run_sequential(args, logger):
     groups = {"agents": args.n_agents}
     preprocess = {"actions": ("actions_onehot", [OneHot(out_dim=args.n_actions)])}
 
-    buffer = ReplayBuffer(
+    # --- ADDED: Logic to select Prioritized Replay Buffer if use_per is True ---
+    BufferCls = PrioritizedReplayBuffer if getattr(args, "use_per", False) else ReplayBuffer
+    buffer = BufferCls(
         scheme,
         groups,
         args.buffer_size,
@@ -133,7 +136,7 @@ def run_sequential(args, logger):
 
     # Setup multiagent controller here
     mac = mac_REGISTRY[args.mac](buffer.scheme, groups, args)
-            
+
     val_args = copy.deepcopy(args)
     val_args.env_args["mode"] = "validation"
     val_runner = r_REGISTRY[args.runner](args=val_args, logger=logger)
@@ -165,10 +168,11 @@ def run_sequential(args, logger):
         learner.cuda()
 
     if args.checkpoint_path:
-        visual_runner.mac.load_models(args.checkpoint_path, postfix = '_800')
+        visual_runner.mac.load_models(args.checkpoint_path, postfix='_800')
         vis_save_path = os.path.join(
             args.local_results_path, args.unique_token, "vis"
-        ) if os.getenv("AMLT_OUTPUT_DIR") is None else os.path.join(os.getenv("AMLT_OUTPUT_DIR"), "results", args.unique_token, "vis")
+        ) if os.getenv("AMLT_OUTPUT_DIR") is None else os.path.join(os.getenv("AMLT_OUTPUT_DIR"), "results",
+                                                                    args.unique_token, "vis")
         logger.console_logger.info("Visualized result saved in {}".format(vis_save_path))
         visual_runner.run_visualize(visualize_path=vis_save_path, t="")
         logger.console_logger.info("Finish visualizing")
@@ -206,30 +210,37 @@ def run_sequential(args, logger):
 
             if args.use_reward_normalization:
                 episode_batch = reward_scaler.transform(episode_batch)
-            buffer.insert_episode_batch(episode_batch)
-            
+
+            # --- ADDED: Logic to handle PER priority calculation ---
+            if isinstance(buffer, PrioritizedReplayBuffer):
+                overflow = 0.0
+                for i in range(args.n_warehouses):
+                    overflow += train_stats.get(f"mean_excess_sum_store_{i + 1}", 0)
+                buffer.insert_episode_batch(
+                    episode_batch, priority=[overflow] * episode_batch.batch_size
+                )
+            else:
+                buffer.insert_episode_batch(episode_batch)
 
         # Step 2: Train
         if buffer.can_sample(args.batch_size):
             next_episode = episode + args.batch_size_run
             if (args.accumulated_episodes == None) or (
-                args.accumulated_episodes
-                and next_episode % args.accumulated_episodes == 0
+                    args.accumulated_episodes
+                    and next_episode % args.accumulated_episodes == 0
             ):
                 episode_sample = buffer.sample(args.batch_size)
 
                 # Truncate batch to only filled timesteps
                 max_ep_t = episode_sample.max_t_filled()
                 episode_sample = episode_sample[:, :max_ep_t]
-
                 if episode_sample.device != args.device:
                     episode_sample.to(args.device)
-
                 learner.train(episode_sample, runner.t_env, episode)
 
         # Step 3: Evaluate
         if runner.t_env >= last_test_T + args.test_interval:
-        # if True:
+            # if True:
             print("test-------------------------")
             # Log to console
             logger.console_logger.info(
@@ -247,8 +258,13 @@ def run_sequential(args, logger):
             # Evaluate the policy executed by argmax for the corresponding Q
             val_stats, val_lambda_return, val_old_return = \
                 val_runner.run(test_mode=True, lbda_index=0)
+
+            # --- ADDED: Log intermediate value for Optuna Pruning ---
+            logger.console_logger.info(f"INTERMEDIATE_VAL_RETURN: {val_old_return}")
+
             test_stats, test_lambda_return, test_old_return = \
                 test_runner.run(test_mode=True, lbda_index=0)
+
             wandb_dict.update({
                 'val_return_old': val_old_return,
                 'val_max_instock_sum': val_stats['max_in_stock_sum'],
@@ -263,7 +279,9 @@ def run_sequential(args, logger):
                 print("new best val result : {}".format(val_old_return))
                 print("new test result : {}".format(test_old_return))
                 save_path = os.path.join(
-                args.local_results_path, args.unique_token, "models", str(runner.t_env)) if os.getenv("AMLT_OUTPUT_DIR") is None else os.path.join(os.getenv("AMLT_OUTPUT_DIR"), "results", args.unique_token, "models", str(runner.t_env))
+                    args.local_results_path, args.unique_token, "models", str(runner.t_env)) if os.getenv(
+                    "AMLT_OUTPUT_DIR") is None else os.path.join(os.getenv("AMLT_OUTPUT_DIR"), "results",
+                                                                 args.unique_token, "models", str(runner.t_env))
                 save_path = save_path.replace('*', '_')
                 os.makedirs(save_path, exist_ok=True)
                 logger.console_logger.info("Saving models to {}".format(save_path))
@@ -278,24 +296,24 @@ def run_sequential(args, logger):
 
         # Step 4: Save model
         if args.save_model and (
-            runner.t_env - model_save_time >= args.save_model_interval
-            or model_save_time == 0
+                runner.t_env - model_save_time >= args.save_model_interval
+                or model_save_time == 0
         ):
             model_save_time = runner.t_env
             save_path = os.path.join(
                 args.local_results_path, args.unique_token, "models", str(runner.t_env)
-            ) if os.getenv("AMLT_OUTPUT_DIR") is None else os.path.join(os.getenv("AMLT_OUTPUT_DIR"), "results", args.unique_token, "models", str(runner.t_env))
+            ) if os.getenv("AMLT_OUTPUT_DIR") is None else os.path.join(os.getenv("AMLT_OUTPUT_DIR"), "results",
+                                                                        args.unique_token, "models", str(runner.t_env))
             save_path = save_path.replace('*', '_')
             os.makedirs(save_path, exist_ok=True)
             logger.console_logger.info("Saving models to {}".format(save_path))
 
             # learner should handle saving/loading -- delegate actor save/load to mac,
             # use appropriate filenames to do critics, optimizer states
-            learner.save_models(save_path, '_'+str(runner.t_env))
+            learner.save_models(save_path, '_' + str(runner.t_env))
 
         # Step 5: Visualize
         if args.visualize and ((runner.t_env - visual_time) / args.visualize_interval >= 1.0):
-
             visual_time = runner.t_env
             visual_outputs_path = os.path.join(
                 args.local_results_path, args.unique_token, "visual_outputs"
@@ -321,7 +339,6 @@ def run_sequential(args, logger):
 
 
 def args_sanity_check(config, _log):
-
     # set CUDA flags
     # config["use_cuda"] = True # Use cuda whenever possible!
     if config["use_cuda"] and not torch.cuda.is_available():
@@ -334,7 +351,7 @@ def args_sanity_check(config, _log):
         config["test_nepisode"] = config["batch_size_run"]
     else:
         config["test_nepisode"] = (
-            config["test_nepisode"] // config["batch_size_run"]
-        ) * config["batch_size_run"]
+                                          config["test_nepisode"] // config["batch_size_run"]
+                                  ) * config["batch_size_run"]
 
     return config
