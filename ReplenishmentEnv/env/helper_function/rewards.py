@@ -47,7 +47,7 @@ def reward1(agent_states: AgentStates, profit_info: dict) -> Tuple[np.array, dic
         - overflow_cost_ratio: Only overflow_cost_ratio of excess skus will cost loss in profit
         - unit_storage_cost: unit storage cost per volume.
 """
-def reward2(agent_states: AgentStates, profit_info: dict) -> Tuple[np.array, dict]:
+def reward2(agent_states: AgentStates, profit_info: dict, lambda1: float = 0.0, lambda2: float = 0.0) -> Tuple[np.array, dict]:
     selling_price      = agent_states["all_warehouses", "selling_price"]
     procurement_cost   = agent_states["all_warehouses", "procurement_cost"]
     sale               = agent_states["all_warehouses", "sale"]
