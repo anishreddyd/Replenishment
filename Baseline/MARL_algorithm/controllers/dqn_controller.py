@@ -13,11 +13,8 @@ class DQNMAC:
         self.n_agents = args.n_agents
         self.n_actions = args.n_actions
         self.args = args
-        self.input_seq_str = (
-            f"{args.actor_input_seq_str}_{self.n_agents}_{self.n_actions}"
-        )
-
-        input_shape = get_actor_input_shape(self.input_seq_str, scheme)
+        # MODIFIED: Input shape calculation is now delegated to a utility function
+        input_shape = self._get_input_shape(scheme)
         self._build_agents(input_shape)
         self.agent_output_type = args.agent_output_type
 
@@ -44,9 +41,16 @@ class DQNMAC:
         return chosen_actions
 
     def forward(self, ep_batch, t, t_env, test_mode=False):
-        agent_inputs = build_actor_inputs(self.input_seq_str, ep_batch, t)
-        avail_actions = ep_batch["avail_actions"][:, t]
-        agent_outs, self.hidden_states = self.agent(agent_inputs, self.hidden_states)
+        # The build_actor_inputs utility function is now correctly used
+        agent_inputs = self._build_inputs(ep_batch, t)
+
+        # --- FIX: Correctly detach the hidden state ---
+        # 1. Get the agent's output and the new hidden state
+        agent_outs, new_hidden_states = self.agent(agent_inputs, self.hidden_states)
+
+        # 2. Detach the new hidden state to prevent memory leaks
+        self.hidden_states = new_hidden_states.detach()
+        # --- END OF FIX ---
 
         return agent_outs.view(ep_batch.batch_size, self.n_agents, -1)
 
@@ -55,7 +59,7 @@ class DQNMAC:
         if self.hidden_states is not None:
             self.hidden_states = self.hidden_states.unsqueeze(0).expand(
                 batch_size, self.n_agents, -1
-            )  # bav
+            )
 
     def parameters(self):
         return self.agent.parameters()
@@ -80,11 +84,10 @@ class DQNMAC:
         self.agent = agent_REGISTRY[self.args.agent](input_shape, self.args)
 
     def _build_inputs(self, batch, t):
-        # Assumes homogenous agents with flat observations.
-        # Other MACs might want to e.g. delegate building inputs to each agent
+        # This function correctly builds the input for the agent
         bs = batch.batch_size
         inputs = []
-        inputs.append(batch["obs"][:, t])  # b1av
+        inputs.append(batch["obs"][:, t])
         if self.args.obs_last_action:
             if t == 0:
                 inputs.append(torch.zeros_like(batch["actions_onehot"][:, t]))
@@ -97,14 +100,20 @@ class DQNMAC:
                 .expand(bs, -1, -1)
             )
 
+        # Handle mean_action if it's part of the input string
+        if "ma" in getattr(self.args, "actor_input_seq_str", ""):
+            inputs.append(batch["mean_action"][:, t])
+
         inputs = torch.cat([x.reshape(bs, self.n_agents, -1) for x in inputs], dim=-1)
         return inputs
 
     def _get_input_shape(self, scheme):
+        # This function correctly calculates the input shape based on the config
         input_shape = scheme["obs"]["vshape"]
         if self.args.obs_last_action:
             input_shape += scheme["actions_onehot"]["vshape"][0]
         if self.args.obs_agent_id:
             input_shape += self.n_agents
-
+        if "ma" in getattr(self.args, "actor_input_seq_str", ""):
+            input_shape += scheme["mean_action"]["vshape"][0]
         return input_shape

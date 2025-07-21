@@ -24,14 +24,30 @@ class QLearner:
         self.params += list(self.mixer.parameters())
         self.target_mixer = copy.deepcopy(self.mixer)
 
-        self.optimiser = RMSprop(params=self.params, lr=args.lr, alpha=args.optim_alpha, eps=args.optim_eps)
+        # --- UPDATED: Switched to Adam Optimizer for better stability ---
+        if args.optim.lower() == "adam":
+            self.optimiser = Adam(params=self.params, lr=args.lr, eps=args.optim_eps)
+        else:
+            self.optimiser = RMSprop(params=self.params, lr=args.lr, alpha=args.optim_alpha, eps=args.optim_eps)
 
-        # a little wasteful to deepcopy (e.g. duplicates action selector), but should work for any MAC
+        # --- ADDED: Store initial LR for decay schedule ---
+        self.initial_lr = args.lr
+
         self.target_mac = copy.deepcopy(mac)
 
         self.log_stats_t = -self.args.learner_log_interval - 1
 
     def train(self, batch: EpisodeBatch, t_env: int, episode_num: int):
+
+        # --- ADDED: Learning Rate Decay Logic ---
+        if getattr(self.args, "use_lr_decay", False):
+            frac = t_env / self.args.t_max
+            new_lr = self.initial_lr * (1.0 - frac)
+            new_lr = max(new_lr, 0.0)
+            for param_group in self.optimiser.param_groups:
+                param_group['lr'] = new_lr
+        # --- END OF ADDITION ---
+
         # Get the relevant quantities
         rewards = batch["reward"][:, :-1]
         actions = batch["actions"][:, :-1]
