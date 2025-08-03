@@ -16,6 +16,7 @@ env:
   lookback_len: 21
   integerization_sku: True
   warmup: replenish_by_last_demand
+  cross_sku_edges: False
   sku_list: ReplenishmentEnv/data/sku2778/sku50.sku_list.csv
 
 warehouse:
@@ -62,9 +63,9 @@ warehouse:
         backlog_ratio: 0.1
         overflow_cost_ratio: 0.5
 
-profit_function: reward2
+profit_function: reward2_enhanced
 
-reward_function: reward2
+reward_function: reward2_enhanced
 
 action:
   mode: demand_mean_continuous
